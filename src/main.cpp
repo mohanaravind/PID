@@ -3,6 +3,7 @@
 #include "json.hpp"
 #include "PID.h"
 #include <math.h>
+#include <fstream>
 
 // for convenience
 using json = nlohmann::json;
@@ -11,6 +12,7 @@ using json = nlohmann::json;
 constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
+
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -28,14 +30,28 @@ std::string hasData(std::string s) {
   return "";
 }
 
-int main()
+int main(int argc, char *argv[])
 {
   uWS::Hub h;
 
-  PID pid;
-  // TODO: Initialize the pid variable.
+  PID pid_s;
+  PID pid_t;
+  bool train;
 
-  h.onMessage([&pid](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
+  // check if training flag is sent
+  train = argc > 0;
+    
+  // TODO: Initialize the pid variable.
+  // pid.Init(0.9, 3.0, 0.5); // 0.3 throttle 
+
+  // pid.Init(1.3, 3.0, 0.5, "steer_metrics.csv");
+  // pid_s.Init(1.3, 3.0, 0.5, "steer_metrics.csv");
+  // pid_s.Init(1.4, 1.9, 0.4, "steer_metrics.csv");
+  // pid_s.Init(0.3, 0.3, 0.05, "steer_metrics.csv");
+  pid_s.Init(0.246, 0.057, 0.01, "steer_metrics.csv");
+  pid_t.Init(0.017, 0.001, 0.001, "throttle_metrics.csv");
+
+  h.onMessage([&pid_s, &pid_t, train](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -58,14 +74,36 @@ int main()
           * another PID controller to control the speed!
           */
           
-          // DEBUG
-          std::cout << "CTE: " << cte << " Steering Value: " << steer_value << std::endl;
+
+          pid_s.UpdateError(cte, train);            
+          steer_value = pid_s.TotalError();          
+
+          const double REFERENCE_SPEED = 0.8;
+          pid_t.UpdateError((speed - REFERENCE_SPEED) * cte, train);
+          double throttle = REFERENCE_SPEED - pid_t.TotalError();
+                                       
+
+          // use hyperbolic tangent to keep the steer in [-1, 1] range
+          // http://mathworld.wolfram.com/HyperbolicTangent.html          
+          // if the steer value is out of range then normalize it to the range
+          if (steer_value > 1 || steer_value < -1) {
+            steer_value = tanh(steer_value);                    
+          }
+
+          // print every few runs
+          if (pid_s.run_ % 500 == 0) {
+            // DEBUG
+            // print the epoch and run
+            std::cout << "#Epoch: " << pid_s.epoch_ << " #Run: " << pid_s.run_ << std::endl;
+            std::cout << "CTE: " << cte << " Steering Value: " << steer_value << " Throttle Value: " << throttle << std::endl;
+          }
+          
 
           json msgJson;
           msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = 0.3;
+          msgJson["throttle"] = throttle;
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-          std::cout << msg << std::endl;
+          // std::cout << msg << std::endl;
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
@@ -91,7 +129,7 @@ int main()
     }
   });
 
-  h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
+  h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {    
     std::cout << "Connected!!!" << std::endl;
   });
 
